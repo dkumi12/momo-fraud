@@ -1,0 +1,14 @@
+# Environments & Secrets (Never commit credentials!)
+.env
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# MLflow local runs (Artifacts must go to Cloud Storage to be graded!)
+mlruns/
+mlartifacts/
+
+# Data (Do not commit the 1GB PaySim file!)
+*.csv
+*.json
