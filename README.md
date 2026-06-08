@@ -1,6 +1,15 @@
 # MoMo Fraud Detection
 
-An end-to-end machine learning pipeline for detecting fraudulent mobile money transactions using the PaySim dataset.
+An end-to-end machine learning system that detects fraudulent mobile money transactions in real time — before a single pesewa moves.
+
+## What It Does
+
+Every transaction is checked by two layers of protection before it is processed:
+
+1. **XGBoost Model** — analyses balance errors, transaction type, account patterns
+2. **Velocity Detector** — catches smurfing (splitting large fraud into small transactions)
+
+**Result: F1-Score 99.7% | ROC-AUC 99.99%**
 
 ## Project Structure
 

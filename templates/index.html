@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>MoMo Fraud Detection</title>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:'Segoe UI',sans-serif;background:#f0f2f5;min-height:100vh;
+      display:flex;flex-direction:column;align-items:center;padding:30px 16px;}
+
+    .topbar{width:100%;max-width:440px;display:flex;align-items:center;
+      justify-content:space-between;margin-bottom:20px;}
+    .topbar .logo{font-size:1.3rem;font-weight:800;color:#ffcc00;
+      background:#1a1a2e;padding:8px 16px;border-radius:10px;letter-spacing:1px;}
+    .topbar .tagline{font-size:0.75rem;color:#888;text-align:right;line-height:1.5}
+
+    .phone{background:#fff;border-radius:28px;width:100%;max-width:440px;
+      box-shadow:0 12px 40px rgba(0,0,0,0.15);overflow:hidden;}
+
+    .balance-header{background:linear-gradient(135deg,#ffcc00 0%,#ff9900 100%);
+      padding:28px 24px 32px;position:relative;}
+    .balance-header .greeting{font-size:0.85rem;color:rgba(0,0,0,0.6);margin-bottom:4px}
+    .balance-header .name{font-size:1.1rem;font-weight:700;color:#1a1a1a;margin-bottom:18px}
+    .balance-header .bal-label{font-size:0.75rem;color:rgba(0,0,0,0.55);
+      text-transform:uppercase;letter-spacing:.05em}
+    .balance-header .bal-amount{font-size:2.2rem;font-weight:800;color:#1a1a1a;margin-top:2px}
+    .bal-currency{font-size:1rem;font-weight:600;vertical-align:super;margin-right:4px}
+    .shield{position:absolute;top:20px;right:24px;font-size:2rem;opacity:0.25}
+
+    /* velocity bar inside header */
+    .velocity-bar{margin-top:16px;background:rgba(0,0,0,0.12);border-radius:8px;
+      padding:8px 12px;display:flex;justify-content:space-between;align-items:center;}
+    .velocity-bar .v-label{font-size:0.7rem;font-weight:700;color:rgba(0,0,0,0.5);
+      text-transform:uppercase;letter-spacing:.05em}
+    .velocity-bar .v-stats{display:flex;gap:14px;}
+    .v-stat{text-align:center;}
+    .v-stat .val{font-size:1rem;font-weight:800;color:#1a1a1a}
+    .v-stat .lbl{font-size:0.62rem;color:rgba(0,0,0,0.5);text-transform:uppercase}
+    .v-stat.warn .val{color:#dc2626}
+
+    .body{padding:24px}
+    .section-title{font-size:0.7rem;font-weight:700;color:#999;
+      text-transform:uppercase;letter-spacing:.08em;margin-bottom:12px;}
+
+    .actions{display:flex;gap:10px;margin-bottom:24px;flex-wrap:wrap}
+    .action-chip{flex:1;min-width:90px;display:flex;flex-direction:column;
+      align-items:center;gap:6px;background:#f8f9fb;border:2px solid #eee;
+      border-radius:14px;padding:14px 8px;cursor:pointer;transition:all .2s;}
+    .action-chip:hover,.action-chip.active{border-color:#ffcc00;background:#fffbea;}
+    .action-chip .icon{font-size:1.5rem}
+    .action-chip .label{font-size:0.72rem;font-weight:600;color:#555;text-align:center}
+
+    .field{margin-bottom:16px}
+    .field label{display:block;font-size:0.75rem;font-weight:700;color:#888;
+      text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px}
+    .field input,.field select{width:100%;padding:13px 16px;border:1.5px solid #e8e8e8;
+      border-radius:12px;font-size:1rem;color:#1a1a1a;outline:none;
+      transition:border-color .2s;background:#fafafa;}
+    .field input:focus,.field select:focus{border-color:#ffcc00;background:#fff}
+    .amount-wrap{position:relative}
+    .amount-wrap .currency{position:absolute;left:14px;top:50%;transform:translateY(-50%);
+      font-weight:700;color:#aaa;font-size:0.95rem;}
+    .amount-wrap input{padding-left:52px}
+
+    .send-btn{width:100%;padding:15px;margin-top:8px;background:#ffcc00;border:none;
+      border-radius:14px;font-size:1rem;font-weight:800;color:#1a1a1a;
+      cursor:pointer;transition:all .2s;letter-spacing:.03em;}
+    .send-btn:hover{background:#f0bc00;transform:translateY(-1px)}
+    .send-btn:active{transform:translateY(0)}
+    .send-btn:disabled{background:#e0e0e0;color:#aaa;cursor:not-allowed;transform:none}
+
+    .spinner{display:none;width:22px;height:22px;border:3px solid rgba(0,0,0,0.15);
+      border-top-color:#1a1a1a;border-radius:50%;animation:spin .6s linear infinite;
+      margin:16px auto 0;}
+    @keyframes spin{to{transform:rotate(360deg)}}
+
+    /* Transaction history */
+    .tx-history{margin-top:24px;}
+    .tx-history-header{display:flex;justify-content:space-between;align-items:center;
+      margin-bottom:10px;}
+    .reset-btn{font-size:0.72rem;color:#888;background:#f0f2f5;border:none;
+      padding:5px 12px;border-radius:8px;cursor:pointer;font-weight:600;}
+    .reset-btn:hover{background:#e0e2e5}
+    .tx-list{display:flex;flex-direction:column;gap:8px;}
+    .tx-item{display:flex;justify-content:space-between;align-items:center;
+      background:#f8f9fb;border-radius:10px;padding:10px 14px;
+      border-left:4px solid #e0e0e0;animation:fadeIn .3s ease;}
+    .tx-item.fraud-tx{border-left-color:#ef4444;background:#fff5f5}
+    .tx-item.legit-tx{border-left-color:#22c55e;background:#f0fdf4}
+    .tx-item .tx-left .tx-name{font-size:0.85rem;font-weight:700;color:#1a1a1a}
+    .tx-item .tx-left .tx-type{font-size:0.72rem;color:#888}
+    .tx-item .tx-right{text-align:right}
+    .tx-item .tx-right .tx-amount{font-size:0.9rem;font-weight:800;color:#1a1a1a}
+    .tx-item .tx-right .tx-badge{font-size:0.65rem;font-weight:700;padding:2px 8px;
+      border-radius:6px;margin-top:2px;display:inline-block;}
+    .fraud-badge{background:#fee2e2;color:#dc2626}
+    .legit-badge{background:#dcfce7;color:#16a34a}
+    .empty-history{font-size:0.8rem;color:#bbb;text-align:center;padding:16px 0;}
+    @keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+
+    /* Result overlay */
+    .overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);
+      z-index:100;align-items:center;justify-content:center;}
+    .overlay.show{display:flex}
+    .result-card{background:#fff;border-radius:24px;width:90%;max-width:380px;
+      padding:32px 28px;text-align:center;animation:slideUp .3s ease;}
+    @keyframes slideUp{from{transform:translateY(30px);opacity:0}to{transform:translateY(0);opacity:1}}
+    .result-icon{font-size:3.5rem;margin-bottom:12px}
+    .result-title{font-size:1.5rem;font-weight:800;margin-bottom:6px}
+    .result-card.fraud .result-title{color:#dc2626}
+    .result-card.legit .result-title{color:#16a34a}
+    .result-prob{font-size:0.85rem;color:#888;margin-bottom:20px;}
+    .result-details{background:#f8f9fb;border-radius:12px;padding:14px 16px;
+      text-align:left;margin-bottom:16px;}
+    .result-row{display:flex;justify-content:space-between;font-size:0.82rem;
+      padding:4px 0;color:#555;}
+    .result-row span:last-child{font-weight:600;color:#1a1a1a}
+    .result-verdict{font-size:0.82rem;padding:10px 16px;border-radius:10px;
+      font-weight:600;margin-bottom:16px;line-height:1.6;text-align:left;}
+    .fraud .result-verdict{background:#fef2f2;color:#991b1b}
+    .legit .result-verdict{background:#f0fdf4;color:#166534}
+    .velocity-alert{font-size:0.78rem;padding:10px 14px;border-radius:10px;
+      background:#fff7ed;color:#9a3412;border:1px solid #fed7aa;
+      margin-bottom:16px;text-align:left;line-height:1.5;}
+    .close-btn{background:#1a1a2e;color:#fff;border:none;border-radius:12px;
+      padding:12px 32px;font-size:0.9rem;font-weight:700;cursor:pointer;}
+    .close-btn:hover{background:#2d2d4e}
+
+    .note{margin-top:20px;font-size:0.72rem;color:#aaa;text-align:center;
+      max-width:440px;line-height:1.6;}
+  </style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="logo">MoMo AI</div>
+  <div class="tagline">XGBoost · F1 99.7% · AUC 99.99%<br>+ Smurfing / Velocity Detection</div>
+</div>
+
+<div class="phone">
+  <div class="balance-header">
+    <div class="greeting">Good day,</div>
+    <div class="name">David Wilson</div>
+    <div class="bal-label">Available Balance</div>
+    <div class="bal-amount"><span class="bal-currency">GHS</span>12,500.00</div>
+    <div class="shield">🛡️</div>
+
+    <div class="velocity-bar">
+      <div class="v-label">Session Monitor</div>
+      <div class="v-stats">
+        <div class="v-stat" id="vTxCount">
+          <div class="val">0</div><div class="lbl">Transactions</div>
+        </div>
+        <div class="v-stat" id="vCumulative">
+          <div class="val">GHS 0</div><div class="lbl">Total Sent</div>
+        </div>
+        <div class="v-stat" id="vLimit">
+          <div class="val">3 / GHS 6,250</div><div class="lbl">Limit</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="body">
+    <div class="section-title">What would you like to do?</div>
+    <div class="actions" id="actionChips">
+      <div class="action-chip active" data-recipient="kwame">
+        <span class="icon">💸</span><span class="label">Send Money</span>
+      </div>
+      <div class="action-chip" data-recipient="cashpoint">
+        <span class="icon">🏧</span><span class="label">Cash Out</span>
+      </div>
+      <div class="action-chip" data-recipient="shoprite">
+        <span class="icon">🛒</span><span class="label">Pay Merchant</span>
+      </div>
+    </div>
+
+    <form id="form">
+      <input type="hidden" name="recipient" id="recipientInput" value="kwame"/>
+      <input type="hidden" name="session_id" id="sessionId" value=""/>
+
+      <div class="field" id="recipientField">
+        <label>Send To</label>
+        <select name="recipient_display" id="recipientSelect">
+          <option value="kwame">Kwame Asante</option>
+          <option value="abena">Abena Mensah</option>
+          <option value="unknown">Unknown Account ⚠️</option>
+        </select>
+      </div>
+
+      <div class="field">
+        <label>Amount</label>
+        <div class="amount-wrap">
+          <span class="currency">GHS</span>
+          <input type="number" name="amount" id="amountInput"
+                 placeholder="0.00" min="1" step="0.01" required/>
+        </div>
+      </div>
+
+      <button type="submit" class="send-btn" id="sendBtn">Check & Send</button>
+      <div class="spinner" id="spinner"></div>
+    </form>
+
+    <!-- Transaction history -->
+    <div class="tx-history">
+      <div class="tx-history-header">
+        <div class="section-title" style="margin-bottom:0">Session History</div>
+        <button class="reset-btn" id="resetBtn">Reset Session</button>
+      </div>
+      <div class="tx-list" id="txList">
+        <div class="empty-history" id="emptyHistory">No transactions yet</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="note">
+  Demo account · GHS 12,500 balance · Velocity limit: 3 tx or GHS 6,250 per 5 min
+</div>
+
+<!-- Result overlay -->
+<div class="overlay" id="overlay">
+  <div class="result-card" id="resultCard">
+    <div class="result-icon"    id="resultIcon"></div>
+    <div class="result-title"   id="resultTitle"></div>
+    <div class="result-prob"    id="resultProb"></div>
+    <div class="velocity-alert" id="velocityAlert" style="display:none"></div>
+    <div class="result-details">
+      <div class="result-row"><span>Recipient</span>    <span id="dRecipient"></span></div>
+      <div class="result-row"><span>Amount</span>       <span id="dAmount"></span></div>
+      <div class="result-row"><span>Type</span>         <span id="dType"></span></div>
+      <div class="result-row"><span>Balance After</span><span id="dBalance"></span></div>
+      <div class="result-row"><span>Transactions (5 min)</span><span id="dTxCount"></span></div>
+      <div class="result-row"><span>Total Sent (5 min)</span>  <span id="dCumulative"></span></div>
+    </div>
+    <div class="result-verdict" id="resultVerdict"></div>
+    <button class="close-btn" id="closeBtn">Close</button>
+  </div>
+</div>
+
+<script>
+  // Generate a session ID stored in localStorage so the server tracks this browser
+  let SESSION_ID = localStorage.getItem("momo_session") || "sess_" + Math.random().toString(36).slice(2);
+  localStorage.setItem("momo_session", SESSION_ID);
+  document.getElementById("sessionId").value = SESSION_ID;
+
+  let txHistory = [];
+
+  // ── Chip logic ──────────────────────────────────────────────
+  document.querySelectorAll(".action-chip").forEach(chip => {
+    chip.addEventListener("click", () => {
+      document.querySelectorAll(".action-chip").forEach(c => c.classList.remove("active"));
+      chip.classList.add("active");
+      const r   = chip.dataset.recipient;
+      const sel = document.getElementById("recipientSelect");
+      const rf  = document.getElementById("recipientField");
+      if (r === "cashpoint" || r === "shoprite") {
+        rf.style.display = "none";
+        document.getElementById("recipientInput").value = r;
+      } else {
+        rf.style.display = "block";
+        sel.value = sel.options[0].value;
+        document.getElementById("recipientInput").value = sel.options[0].value;
+      }
+    });
+  });
+
+  document.getElementById("recipientSelect").addEventListener("change", function() {
+    document.getElementById("recipientInput").value = this.value;
+  });
+
+  // ── Update velocity bar ─────────────────────────────────────
+  function updateVelocityBar(txCount, cumulative) {
+    const countEl = document.getElementById("vTxCount");
+    const cumEl   = document.getElementById("vCumulative");
+    countEl.querySelector(".val").textContent = txCount;
+    cumEl.querySelector(".val").textContent   = "GHS " + parseFloat(cumulative).toLocaleString();
+    countEl.classList.toggle("warn", txCount >= 3);
+    cumEl.classList.toggle("warn", parseFloat(cumulative) >= 6250);
+  }
+
+  // ── Add to history panel ────────────────────────────────────
+  function addToHistory(data) {
+    txHistory.unshift(data);
+    const list  = document.getElementById("txList");
+    const empty = document.getElementById("emptyHistory");
+    if (empty) empty.remove();
+
+    const item = document.createElement("div");
+    item.className = "tx-item " + (data.fraud ? "fraud-tx" : "legit-tx");
+    item.innerHTML = `
+      <div class="tx-left">
+        <div class="tx-name">${data.recipient_name}</div>
+        <div class="tx-type">${data.tx_type}</div>
+      </div>
+      <div class="tx-right">
+        <div class="tx-amount">GHS ${data.amount}</div>
+        <span class="tx-badge ${data.fraud ? 'fraud-badge' : 'legit-badge'}">
+          ${data.fraud ? "FRAUD" : "CLEAR"}
+        </span>
+      </div>`;
+    list.prepend(item);
+  }
+
+  // ── Form submit ─────────────────────────────────────────────
+  document.getElementById("form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const btn     = document.getElementById("sendBtn");
+    const spinner = document.getElementById("spinner");
+    btn.disabled  = true;
+    spinner.style.display = "block";
+
+    const formData = new FormData();
+    formData.append("amount",     document.getElementById("amountInput").value);
+    formData.append("recipient",  document.getElementById("recipientInput").value);
+    formData.append("session_id", SESSION_ID);
+
+    try {
+      const res  = await fetch("/predict", {method:"POST", body: formData});
+      const data = await res.json();
+      spinner.style.display = "none";
+      btn.disabled = false;
+
+      if (data.error) { alert("Error: " + data.error); return; }
+
+      const isFraud = data.fraud === 1;
+      const card    = document.getElementById("resultCard");
+      card.className = "result-card " + (isFraud ? "fraud" : "legit");
+
+      document.getElementById("resultIcon").textContent  = isFraud ? "🚨" : "✅";
+      document.getElementById("resultTitle").textContent = isFraud ? "FRAUD DETECTED" : "TRANSACTION CLEAR";
+      document.getElementById("resultProb").textContent  = `Fraud probability: ${data.probability}%`;
+
+      // Velocity alert
+      const va = document.getElementById("velocityAlert");
+      if (data.velocity_flag) {
+        va.style.display = "block";
+        va.textContent   = "⚡ Velocity Alert: " + data.reason;
+      } else {
+        va.style.display = "none";
+      }
+
+      document.getElementById("dRecipient").textContent  = data.recipient_name;
+      document.getElementById("dAmount").textContent     = "GHS " + data.amount;
+      document.getElementById("dType").textContent       = data.tx_type;
+      document.getElementById("dBalance").textContent    = "GHS " + data.new_balance;
+      document.getElementById("dTxCount").textContent    = data.tx_count + " / 3";
+      document.getElementById("dCumulative").textContent = "GHS " + data.cumulative + " / GHS 6,250";
+
+      document.getElementById("resultVerdict").textContent = isFraud
+        ? "⚠️ " + data.reason + " Transaction blocked."
+        : "✔ " + data.reason;
+
+      updateVelocityBar(data.tx_count, data.cumulative);
+      addToHistory(data);
+      document.getElementById("overlay").classList.add("show");
+
+    } catch(err) {
+      spinner.style.display = "none";
+      btn.disabled = false;
+      alert("Connection error: " + err.message);
+    }
+  });
+
+  document.getElementById("closeBtn").addEventListener("click", () => {
+    document.getElementById("overlay").classList.remove("show");
+    document.getElementById("amountInput").value = "";
+  });
+
+  // ── Reset session ───────────────────────────────────────────
+  document.getElementById("resetBtn").addEventListener("click", async () => {
+    const fd = new FormData();
+    fd.append("session_id", SESSION_ID);
+    await fetch("/reset", {method:"POST", body: fd});
+    txHistory = [];
+    document.getElementById("txList").innerHTML =
+      '<div class="empty-history" id="emptyHistory">No transactions yet</div>';
+    updateVelocityBar(0, 0);
+  });
+</script>
+</body>
+</html>
