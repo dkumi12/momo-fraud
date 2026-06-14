@@ -4,6 +4,61 @@ This contract defines the interface between the ML service and cloud/application
 clients. It is based on the current service work from `origin/dwilson` and keeps
 the serving API stable while the model and tracking infrastructure evolve.
 
+## Simple Summary for the ML Partner
+
+The API has one main job: receive a mobile money transaction and return whether
+the transaction looks fraudulent.
+
+The most important endpoint is:
+
+```text
+POST /predict
+```
+
+Your model-serving code should accept a transaction like this:
+
+```json
+{
+  "transaction_id": "txn_001",
+  "type": "TRANSFER",
+  "amount": 4500.0,
+  "oldbalanceOrg": 12500.0,
+  "newbalanceOrig": 8000.0,
+  "oldbalanceDest": 8500.0,
+  "newbalanceDest": 13000.0
+}
+```
+
+And return a result like this:
+
+```json
+{
+  "prediction": "FRAUD",
+  "fraud": 1,
+  "probability": 0.9721,
+  "reason": "Model score crossed the fraud threshold."
+}
+```
+
+In plain English:
+
+- `prediction` is the human-readable answer: `FRAUD` or `LEGITIMATE`.
+- `fraud` is the machine-readable answer: `1` for fraud, `0` for legitimate.
+- `probability` is the model confidence between `0` and `1`.
+- `reason` explains why the transaction was flagged or cleared.
+
+The other endpoints are support endpoints:
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /health` | Cloud Run uses this to confirm the API is alive. |
+| `GET /model-info` | Shows which model/version is currently loaded. |
+| `POST /reload-model` | Reloads the production model without rebuilding the API container. |
+
+MLflow is separate from the prediction API. Use MLflow to log training runs,
+metrics, parameters, and model artifacts. Use this API contract when exposing the
+trained model for predictions.
+
 ## Versioning
 
 - Contract version: `v1`
