@@ -9,6 +9,13 @@ venv/
 mlruns/
 mlartifacts/
 
+# Terraform local state and secrets
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfplan
+
 # Data (Do not commit the 1GB PaySim file!)
 *.csv
 *.json

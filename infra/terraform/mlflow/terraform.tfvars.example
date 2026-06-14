@@ -1,0 +1,18 @@
+project_id = "momo-fraud"
+region     = "us-central1"
+
+# Optional. Must be globally unique if set.
+# artifact_bucket_name = "your-project-momo-fraud-mlflow-artifacts"
+
+# Keep this false for real runs. Set true only for disposable demos.
+allow_unauthenticated = false
+
+# Keep this as ALL if you want the direct https://*.run.app URL to work.
+cloud_run_ingress = "INGRESS_TRAFFIC_ALL"
+
+# Keep this true for real infrastructure.
+deletion_protection = true
+
+# Keep true for this simple Cloud Run + Cloud SQL connector setup.
+# Disable only after adding private IP or PSC networking.
+cloud_sql_ipv4_enabled = true
