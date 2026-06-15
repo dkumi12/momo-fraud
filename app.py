@@ -19,8 +19,10 @@ with open(os.path.join(BASE, "models", "feature_columns.json")) as f:
     FEATURE_COLS = json.load(f)
 
 threshold_path = os.path.join(BASE, "models", "threshold.json")
-FRAUD_THRESHOLD = float(json.load(open(threshold_path)).get("threshold", 0.5)) \
-    if os.path.exists(threshold_path) else 0.5
+_threshold_data  = json.load(open(threshold_path)) if os.path.exists(threshold_path) else {}
+FRAUD_THRESHOLD  = float(_threshold_data.get("threshold", 0.5))
+MODEL_RUN_ID     = _threshold_data.get("run_id", "local")
+MODEL_VERSION    = _threshold_data.get("model_version", "v1.0")
 
 MONETARY = ["amount","oldbalanceOrg","newbalanceOrig",
             "oldbalanceDest","newbalanceDest",
@@ -39,55 +41,64 @@ RECIPIENTS = {
 
 TYPE_MAP = {"PAYMENT":0, "TRANSFER":1, "CASH_OUT":2, "CASH_IN":3, "DEBIT":4}
 
-# ── Velocity tracking (in-memory per demo session) ────────────
-# Stores list of {time, amount, recipient} per session_id
 session_log: dict[str, list] = defaultdict(list)
+VELOCITY_WINDOW = 300
+MAX_TX_COUNT    = 3
+MAX_CUMULATIVE  = SENDER_BALANCE * 0.5
+MAX_SAME_DEST   = 2
 
-VELOCITY_WINDOW   = 300      # 5-minute sliding window (seconds)
-MAX_TX_COUNT      = 3        # max transactions allowed per window
-MAX_CUMULATIVE    = SENDER_BALANCE * 0.5   # GHS 6,250 cumulative cap
-MAX_SAME_DEST     = 2        # max times same recipient in window
+
+def _risk_level(prob: float) -> str:
+    if prob >= 0.8:
+        return "high"
+    if prob >= 0.5:
+        return "medium"
+    return "low"
+
+
+def _model_block() -> dict:
+    return {
+        "name":    "xgboost_momo_baseline",
+        "version": MODEL_VERSION,
+        "stage":   "Production",
+        "run_id":  MODEL_RUN_ID,
+    }
 
 
 def check_velocity(session_id: str, amount: float, recipient: str) -> dict:
     now     = time.time()
     history = session_log[session_id]
-
-    # Keep only entries within the sliding window
     history[:] = [t for t in history if now - t["time"] < VELOCITY_WINDOW]
 
-    # Evaluate BEFORE adding this transaction
     count      = len(history)
     cumulative = sum(t["amount"] for t in history) + amount
     same_dest  = sum(1 for t in history if t["recipient"] == recipient)
 
-    flag   = False
-    reason = ""
+    flag, reason = False, ""
 
     if count + 1 > MAX_TX_COUNT:
         flag   = True
         reason = (f"Smurfing detected: {count + 1} transactions within 5 minutes. "
                   f"Fraudsters split large transfers into small ones to avoid detection.")
-
     elif cumulative > MAX_CUMULATIVE:
         flag   = True
         reason = (f"Cumulative transfer of GHS {cumulative:,.2f} within 5 minutes "
                   f"exceeds the allowed limit of GHS {MAX_CUMULATIVE:,.2f}.")
-
     elif same_dest + 1 > MAX_SAME_DEST:
         flag   = True
-        reason = (f"Multiple transfers to the same recipient ({RECIPIENTS[recipient]['name']}) "
+        reason = (f"Multiple transfers to the same recipient ({RECIPIENTS.get(recipient, {}).get('name', recipient)}) "
                   f"in a short period — suspicious pattern detected.")
 
-    # Record this transaction
     history.append({"time": now, "amount": amount, "recipient": recipient})
+    return {"velocity_flag": flag, "reason": reason, "tx_count": count + 1, "cumulative": round(cumulative, 2)}
 
-    return {
-        "velocity_flag":  flag,
-        "reason":         reason,
-        "tx_count":       count + 1,
-        "cumulative":     round(cumulative, 2),
-    }
+
+def _apply_caps_and_log(raw: dict) -> dict:
+    for col in MONETARY:
+        raw[col] = float(np.clip(raw[col], caps[col]["p01"], caps[col]["p99"]))
+    for col in MONETARY:
+        raw[f"log_{col}"] = float(np.log1p(max(raw[col], 0)))
+    return raw
 
 
 def build_feature_payload(amount: float, recipient_key: str) -> dict:
@@ -95,15 +106,8 @@ def build_feature_payload(amount: float, recipient_key: str) -> dict:
     tx_type  = r["type"]
     old_orig = SENDER_BALANCE
     old_dest = r["old_dest"]
-
-    if tx_type in ("TRANSFER", "CASH_OUT", "PAYMENT", "DEBIT"):
-        new_orig = max(0.0, old_orig - amount)
-    else:
-        new_orig = old_orig + amount
-
-    new_dest   = 0.0 if recipient_key == "unknown" else old_dest + amount
-    error_orig = new_orig + amount - old_orig
-    error_dest = old_dest + amount - new_dest
+    new_orig = max(0.0, old_orig - amount) if tx_type in ("TRANSFER","CASH_OUT","PAYMENT","DEBIT") else old_orig + amount
+    new_dest = 0.0 if recipient_key == "unknown" else old_dest + amount
 
     raw = {
         "step":             200,
@@ -114,48 +118,89 @@ def build_feature_payload(amount: float, recipient_key: str) -> dict:
         "oldbalanceDest":   old_dest,
         "newbalanceDest":   new_dest,
         "isDestMerchant":   r["is_merchant"],
-        "errorBalanceOrig": error_orig,
-        "errorBalanceDest": error_dest,
+        "errorBalanceOrig": new_orig + amount - old_orig,
+        "errorBalanceDest": old_dest + amount - new_dest,
     }
-
-    for col in MONETARY:
-        raw[col] = float(np.clip(raw[col], caps[col]["p01"], caps[col]["p99"]))
-    for col in MONETARY:
-        raw[f"log_{col}"] = float(np.log1p(max(raw[col], 0)))
-
-    return raw
+    return _apply_caps_and_log(raw)
 
 
-def assess_transaction(amount: float, recipient_key: str) -> dict:
-    raw        = build_feature_payload(amount, recipient_key)
+def build_feature_payload_from_json(body: dict) -> dict:
+    tx_type  = body["type"]
+    amount   = float(body["amount"])
+    old_orig = float(body["oldbalanceOrg"])
+    new_orig = float(body["newbalanceOrig"])
+    old_dest = float(body["oldbalanceDest"])
+    new_dest = float(body["newbalanceDest"])
+
+    raw = {
+        "step":             int(body.get("step", 200)),
+        "type":             TYPE_MAP[tx_type],
+        "amount":           amount,
+        "oldbalanceOrg":    old_orig,
+        "newbalanceOrig":   new_orig,
+        "oldbalanceDest":   old_dest,
+        "newbalanceDest":   new_dest,
+        "isDestMerchant":   int(body.get("is_dest_merchant", False)),
+        "errorBalanceOrig": new_orig + amount - old_orig,
+        "errorBalanceDest": old_dest + amount - new_dest,
+    }
+    return _apply_caps_and_log(raw)
+
+
+def score_features(raw: dict, amount: float, balance: float, recipient_key: str = "") -> dict:
     X          = np.array([[raw[col] for col in FEATURE_COLS]])
     model_prob = float(xgb.predict_proba(X)[0][1])
-    fraud      = int(model_prob >= FRAUD_THRESHOLD)
-    reason     = "Model score crossed the fraud threshold."
-    r          = RECIPIENTS[recipient_key]
+    model_flag = model_prob >= FRAUD_THRESHOLD
+    rule_flag  = False
+    reason     = "No fraud signal detected by the model."
+    r          = RECIPIENTS.get(recipient_key, {})
+    tx_type    = r.get("type", "")
 
-    if amount > SENDER_BALANCE:
-        fraud, model_prob = 1, max(model_prob, 0.99)
-        reason = "Amount exceeds available balance."
-    elif r["type"] in ("TRANSFER", "CASH_OUT") and recipient_key == "unknown":
-        fraud, model_prob = 1, max(model_prob, 0.99)
-        reason = "Transfer to unknown account — destination balance mismatch detected."
-    elif r["type"] in ("TRANSFER","CASH_OUT") and amount >= SENDER_BALANCE * 0.90:
-        fraud, model_prob = 1, max(model_prob, 0.95)
-        reason = "Transaction would drain nearly all available funds."
-    elif fraud == 0:
-        reason = "No fraud signal detected by the model."
+    if amount > balance:
+        rule_flag  = True
+        model_prob = max(model_prob, 0.99)
+        reason     = "Amount exceeds available balance."
+    elif tx_type in ("TRANSFER","CASH_OUT") and recipient_key == "unknown":
+        rule_flag  = True
+        model_prob = max(model_prob, 0.99)
+        reason     = "Transfer to unknown account — destination balance mismatch detected."
+    elif tx_type in ("TRANSFER","CASH_OUT") and amount >= balance * 0.90:
+        rule_flag  = True
+        model_prob = max(model_prob, 0.95)
+        reason     = "Transaction would drain nearly all available funds."
+    elif model_flag:
+        reason = "Model score crossed the fraud threshold."
 
-    return {"fraud": fraud, "probability": model_prob, "reason": reason}
+    return {
+        "fraud":      int(model_flag or rule_flag),
+        "probability": model_prob,
+        "reason":      reason,
+        "model_flag":  model_flag,
+        "rule_flag":   rule_flag,
+    }
+
+
+# ── Endpoints ─────────────────────────────────────────────────
+
+@app.get("/health")
+async def health():
+    return {"status": "ok", "service": "momo-fraud-api", "model_loaded": True}
+
+
+@app.get("/model-info")
+async def model_info():
+    return {**_model_block(), "features": FEATURE_COLS}
 
 
 @app.get("/", response_class=HTMLResponse)
 async def home():
     return HTMLResponse(read_html("index.html"))
 
+
 @app.get("/favicon.ico")
 async def favicon():
     return Response(status_code=204)
+
 
 @app.post("/reset")
 async def reset_session(request: Request):
@@ -164,10 +209,52 @@ async def reset_session(request: Request):
     session_log[session_id] = []
     return {"reset": True}
 
+
 @app.post("/predict")
 async def predict(request: Request):
-    form = await request.form()
+    content_type = request.headers.get("content-type", "")
+
     try:
+        # ── JSON path (production clients) ────────────────────
+        if "application/json" in content_type:
+            body       = await request.json()
+            amount     = float(body["amount"])
+            session_id = body.get("session_id", "default")
+            tx_id      = body.get("transaction_id", f"txn_{int(time.time())}")
+            recipient  = body.get("recipient_id", "unknown")
+
+            if amount <= 0:
+                return {"error": "validation_error", "message": "amount must be greater than 0",
+                        "fields": {"amount": "must be greater than 0"}}
+
+            raw        = build_feature_payload_from_json(body)
+            assessment = score_features(raw, amount, float(body.get("oldbalanceOrg", amount)), recipient)
+            velocity   = check_velocity(session_id, amount, recipient)
+
+            is_fraud = assessment["fraud"] == 1 or velocity["velocity_flag"]
+            prob     = assessment["probability"]
+            reason   = velocity["reason"] if velocity["velocity_flag"] else assessment["reason"]
+            if velocity["velocity_flag"]:
+                prob = max(prob, 0.97)
+
+            return {
+                "transaction_id": tx_id,
+                "prediction":     "FRAUD" if is_fraud else "LEGITIMATE",
+                "fraud":           int(is_fraud),
+                "probability":     round(prob, 4),
+                "threshold":       FRAUD_THRESHOLD,
+                "risk_level":      _risk_level(prob),
+                "reason":          reason,
+                "signals": {
+                    "model_flag":    assessment["model_flag"],
+                    "velocity_flag": velocity["velocity_flag"],
+                    "rule_flag":     assessment["rule_flag"],
+                },
+                "model": _model_block(),
+            }
+
+        # ── Form path (HTML demo) ─────────────────────────────
+        form       = await request.form()
         amount     = float(form["amount"])
         recipient  = form["recipient"]
         session_id = form.get("session_id", "demo")
@@ -175,17 +262,13 @@ async def predict(request: Request):
         if amount <= 0:
             return {"error": "Amount must be greater than 0"}
 
-        # ── 1. Per-transaction ML + rule check ────────────────
-        assessment = assess_transaction(amount, recipient)
+        raw        = build_feature_payload(amount, recipient)
+        assessment = score_features(raw, amount, SENDER_BALANCE, recipient)
+        velocity   = check_velocity(session_id, amount, recipient)
 
-        # ── 2. Velocity / smurfing check ──────────────────────
-        velocity = check_velocity(session_id, amount, recipient)
-
-        # Either signal can trigger fraud
         is_fraud = assessment["fraud"] == 1 or velocity["velocity_flag"]
         prob     = assessment["probability"]
         reason   = velocity["reason"] if velocity["velocity_flag"] else assessment["reason"]
-
         if velocity["velocity_flag"]:
             prob = max(prob, 0.97)
 
@@ -194,6 +277,8 @@ async def predict(request: Request):
             "prediction":     "FRAUD" if is_fraud else "LEGITIMATE",
             "fraud":           int(is_fraud),
             "probability":     round(prob * 100, 2),
+            "threshold":       FRAUD_THRESHOLD,
+            "risk_level":      _risk_level(prob),
             "amount":          f"{amount:,.2f}",
             "recipient_name":  r["name"],
             "tx_type":         r["type"],
@@ -203,6 +288,13 @@ async def predict(request: Request):
             "tx_count":        velocity["tx_count"],
             "cumulative":      f"{velocity['cumulative']:,.2f}",
             "velocity_flag":   velocity["velocity_flag"],
+            "signals": {
+                "model_flag":    assessment["model_flag"],
+                "velocity_flag": velocity["velocity_flag"],
+                "rule_flag":     assessment["rule_flag"],
+            },
+            "model": _model_block(),
         }
+
     except Exception as e:
-        return {"error": str(e)}
+        return {"error": "prediction_error", "message": str(e)}
