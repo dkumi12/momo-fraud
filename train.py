@@ -6,13 +6,16 @@ import os
 import pickle
 
 import mlflow
-import mlflow.xgboost
 import numpy as np
 import pandas as pd
 from imblearn.over_sampling import SMOTE
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import classification_report, confusion_matrix, f1_score, roc_auc_score
 from sklearn.model_selection import train_test_split
 from xgboost import XGBClassifier
+
+from features import apply_features, fit_caps, load_clean_data
 
 
 SEED = 42
@@ -20,53 +23,37 @@ MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "https://momo-mlflow-7e2l
 MLFLOW_EXPERIMENT   = os.getenv("MLFLOW_EXPERIMENT_NAME", "momo-fraud")
 MODEL_NAME          = "xgboost_momo_baseline"
 
-MONETARY = [
-    "amount",
-    "oldbalanceOrg",
-    "newbalanceOrig",
-    "oldbalanceDest",
-    "newbalanceDest",
-    "errorBalanceOrig",
-    "errorBalanceDest",
-]
-TYPE_MAP = {"PAYMENT": 0, "TRANSFER": 1, "CASH_OUT": 2, "CASH_IN": 3, "DEBIT": 4}
-
-
-def load_clean_data(path: str) -> tuple[pd.DataFrame, pd.Series]:
-    df = pd.read_csv(path)
-    df = df[df["amount"] > 0].drop_duplicates().reset_index(drop=True)
-    df["isDestMerchant"] = (df["nameDest"].str[0] == "M").astype(int)
-    df = df.drop(columns=["nameOrig", "nameDest", "isFlaggedFraud"])
-    df["type"] = df["type"].map(TYPE_MAP)
-    df["errorBalanceOrig"] = df["newbalanceOrig"] + df["amount"] - df["oldbalanceOrg"]
-    df["errorBalanceDest"] = df["oldbalanceDest"] + df["amount"] - df["newbalanceDest"]
-    y = df.pop("isFraud")
-    return df, y
-
-
-def fit_caps(X_train: pd.DataFrame) -> dict:
-    return {
-        col: {
-            "p01": float(X_train[col].quantile(0.01)),
-            "p99": float(X_train[col].quantile(0.99)),
-        }
-        for col in MONETARY
-    }
-
-
-def apply_features(X: pd.DataFrame, caps: dict) -> pd.DataFrame:
-    X = X.copy()
-    for col in MONETARY:
-        X[col] = X[col].clip(lower=caps[col]["p01"], upper=caps[col]["p99"])
-    for col in MONETARY:
-        X[f"log_{col}"] = np.log1p(X[col].clip(lower=0))
-    return X
-
 
 def best_threshold(y_true: pd.Series, y_prob: np.ndarray) -> tuple[float, float]:
     candidates = np.linspace(0.05, 0.95, 181)
-    scores = [(threshold, f1_score(y_true, y_prob >= threshold)) for threshold in candidates]
+    scores = [(t, f1_score(y_true, y_prob >= t)) for t in candidates]
     return max(scores, key=lambda item: item[1])
+
+
+def log_baseline(name: str, model, X_train, y_train, X_val, y_val, X_test, y_test, params: dict):
+    """Train a baseline model and log it as its own MLflow run."""
+    with mlflow.start_run(run_name=name):
+        mlflow.log_params({**params, "model": name})
+        model.fit(X_train, y_train)
+
+        val_prob  = model.predict_proba(X_val)[:, 1]
+        threshold, val_f1 = best_threshold(y_val, val_prob)
+
+        y_prob = model.predict_proba(X_test)[:, 1]
+        y_pred = (y_prob >= threshold).astype(int)
+        test_f1  = f1_score(y_test, y_pred)
+        test_auc = roc_auc_score(y_test, y_prob)
+
+        mlflow.log_metrics({
+            "val_f1":    round(val_f1, 4),
+            "threshold": round(threshold, 4),
+            "test_f1":   round(test_f1, 4),
+            "test_auc":  round(test_auc, 4),
+        })
+        mlflow.set_tag("model_name", name)
+
+        print(f"  {name:25s} | F1: {test_f1:.4f} | AUC: {test_auc:.4f} | Threshold: {threshold:.3f}")
+        return test_f1, test_auc
 
 
 def main() -> None:
@@ -89,15 +76,11 @@ def main() -> None:
         X, y, test_size=0.2, random_state=SEED, stratify=y
     )
     X_train, X_val, y_train, y_val = train_test_split(
-        X_train_full,
-        y_train_full,
-        test_size=0.25,
-        random_state=SEED,
-        stratify=y_train_full,
+        X_train_full, y_train_full, test_size=0.25, random_state=SEED, stratify=y_train_full,
     )
 
     print("[3/7] Fitting preprocessing on train split only...")
-    caps = fit_caps(X_train)
+    caps    = fit_caps(X_train)
     X_train = apply_features(X_train, caps)
     X_val   = apply_features(X_val, caps)
     X_test  = apply_features(X_test, caps)
@@ -106,7 +89,21 @@ def main() -> None:
     X_train_sm, y_train_sm = SMOTE(random_state=SEED).fit_resample(X_train, y_train)
     print(f"      After SMOTE: {pd.Series(y_train_sm).value_counts().to_dict()}")
 
-    params = {
+    print("\n[5/7] Logging baseline models to MLflow...")
+    log_baseline(
+        "logistic_regression",
+        LogisticRegression(max_iter=1000, random_state=SEED),
+        X_train_sm, y_train_sm, X_val, y_val, X_test, y_test,
+        {"max_iter": 1000},
+    )
+    log_baseline(
+        "random_forest",
+        RandomForestClassifier(n_estimators=100, random_state=SEED, n_jobs=-1),
+        X_train_sm, y_train_sm, X_val, y_val, X_test, y_test,
+        {"n_estimators": 100},
+    )
+
+    xgb_params = {
         "n_estimators": 160,
         "max_depth": 5,
         "learning_rate": 0.08,
@@ -114,20 +111,18 @@ def main() -> None:
         "colsample_bytree": 0.9,
     }
 
+    print("\n[6/7] Training and logging XGBoost (production model)...")
     with mlflow.start_run(run_name="xgboost_baseline"):
-        mlflow.log_params({**params, "seed": SEED, "smote": True})
+        mlflow.log_params({**xgb_params, "seed": SEED, "smote": True, "model": "xgboost"})
 
-        print("[5/7] Training XGBoost...")
-        model = XGBClassifier(**params, random_state=SEED, eval_metric="logloss")
+        model = XGBClassifier(**xgb_params, random_state=SEED, eval_metric="logloss")
         model.fit(X_train_sm, y_train_sm)
 
-        print("[6/7] Selecting validation threshold...")
-        val_prob = model.predict_proba(X_val)[:, 1]
+        val_prob          = model.predict_proba(X_val)[:, 1]
         threshold, val_f1 = best_threshold(y_val, val_prob)
-        print(f"      Threshold: {threshold:.3f} | Validation F1: {val_f1:.4f}")
 
-        y_prob = model.predict_proba(X_test)[:, 1]
-        y_pred = (y_prob >= threshold).astype(int)
+        y_prob   = model.predict_proba(X_test)[:, 1]
+        y_pred   = (y_prob >= threshold).astype(int)
         test_f1  = f1_score(y_test, y_pred)
         test_auc = roc_auc_score(y_test, y_prob)
 
@@ -139,11 +134,13 @@ def main() -> None:
         })
         mlflow.set_tag("model_name", MODEL_NAME)
         mlflow.set_tag("artifact_local_path", "models/xgboost.pkl")
+        mlflow.set_tag("stage", "Production")
 
         run_id = mlflow.active_run().info.run_id
+        print(f"      Threshold: {threshold:.3f} | F1: {test_f1:.4f} | AUC: {test_auc:.4f}")
         print(f"      MLflow run: {run_id}")
 
-        print("[7/7] Saving artifacts...")
+        print("\n[7/7] Saving artifacts...")
         with open("models/xgboost.pkl", "wb") as f:
             pickle.dump(model, f)
         with open("models/caps.json", "w") as f:
@@ -152,14 +149,14 @@ def main() -> None:
             json.dump(X_train.columns.tolist(), f, indent=2)
         with open("models/threshold.json", "w") as f:
             json.dump({
-                "threshold":      float(threshold),
-                "validation_f1":  float(val_f1),
-                "run_id":         run_id,
-                "model_version":  "v1.0",
+                "threshold":     float(threshold),
+                "validation_f1": float(val_f1),
+                "run_id":        run_id,
+                "model_version": "v1.0",
             }, f, indent=2)
 
     print("\n" + "=" * 55)
-    print("  Final Test Results")
+    print("  Final Test Results (XGBoost)")
     print("=" * 55)
     print("Confusion matrix:", confusion_matrix(y_test, y_pred).tolist())
     print(classification_report(y_test, y_pred, target_names=["Non-Fraud", "Fraud"]))
