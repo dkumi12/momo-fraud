@@ -210,6 +210,26 @@ async def reset_session(request: Request):
     return {"reset": True}
 
 
+@app.post("/reload-model")
+async def reload_model(request: Request):
+    global xgb, FRAUD_THRESHOLD, MODEL_RUN_ID, MODEL_VERSION
+    try:
+        with open(os.path.join(BASE, "models", "xgboost.pkl"), "rb") as f:
+            xgb = pickle.load(f)
+        td = json.load(open(threshold_path)) if os.path.exists(threshold_path) else {}
+        FRAUD_THRESHOLD = float(td.get("threshold", FRAUD_THRESHOLD))
+        MODEL_RUN_ID    = td.get("run_id", MODEL_RUN_ID)
+        MODEL_VERSION   = td.get("model_version", MODEL_VERSION)
+        return {
+            "status":     "reloaded",
+            "model_name": "xgboost_momo_baseline",
+            "version":    MODEL_VERSION,
+            "stage":      "Production",
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
 @app.post("/predict")
 async def predict(request: Request):
     content_type = request.headers.get("content-type", "")
