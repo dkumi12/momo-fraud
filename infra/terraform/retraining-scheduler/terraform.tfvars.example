@@ -1,0 +1,15 @@
+project_id = "momo-fraud"
+region     = "us-central1"
+
+# Every Sunday at midnight in Ghana.
+schedule  = "0 0 * * 0"
+time_zone = "Africa/Accra"
+
+mlflow_tracking_uri    = "https://momo-mlflow-7e2lu7f7ta-uc.a.run.app"
+mlflow_experiment_name = "momo-fraud"
+mlflow_artifact_bucket_name = "momo-fraud-momo-fraud-mlflow-artifacts"
+prediction_api_url     = "https://momo-fraud-api-7e2lu7f7ta-uc.a.run.app"
+
+# Optional. Leave commented to use gs://<project_id>-momo-fraud-training-data/Pay-sim.csv.
+# training_data_bucket_name = "momo-fraud-momo-fraud-training-data"
+training_data_object = "Pay-sim.csv"

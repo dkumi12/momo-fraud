@@ -1,0 +1,17 @@
+.git
+.gitignore
+.terraform
+**/.terraform/**
+**/*.tfstate
+**/*.tfstate.*
+**/*.tfvars
+**/*.tfplan
+__pycache__/
+**/__pycache__/**
+*.pyc
+.env
+.venv/
+venv/
+notebooks/
+*.ipynb
+Pay-sim.csv
