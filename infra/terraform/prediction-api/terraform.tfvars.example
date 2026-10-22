@@ -1,0 +1,9 @@
+project_id = "momo-fraud"
+region     = "us-central1"
+
+allow_unauthenticated = true
+cloud_run_ingress     = "INGRESS_TRAFFIC_ALL"
+
+mlflow_tracking_uri     = "https://momo-mlflow-7e2lu7f7ta-uc.a.run.app"
+mlflow_experiment_name  = "momo-fraud"
+request_log_collection  = "prediction_requests"

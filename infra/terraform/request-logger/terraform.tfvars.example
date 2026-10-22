@@ -1,0 +1,7 @@
+project_id = "momo-fraud"
+region     = "us-central1"
+
+firestore_location = "us-central1"
+
+# Keep enabled for real logs.
+delete_protection_state = "DELETE_PROTECTION_ENABLED"
